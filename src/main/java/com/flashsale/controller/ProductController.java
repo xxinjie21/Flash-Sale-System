@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
 import java.util.List;
 
 /**
@@ -89,7 +90,7 @@ public class ProductController {
      */
     @PostMapping("/seckill/execute")
     public Result<String> executeSeckill(
-        @RequestBody SeckillRequest request,
+        @Valid @RequestBody SeckillRequest request,
         HttpServletRequest httpRequest
     ) {
         // 从请求属性中获取用户 ID（登录拦截器已设置）

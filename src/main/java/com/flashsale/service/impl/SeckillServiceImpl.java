@@ -178,46 +178,48 @@ public class SeckillServiceImpl implements SeckillService {
      * 接口限流（使用 Redisson 原子计数器）
      */
     private void rateLimit(Long seckillId, Long userId) {
-        // 用户维度限流
+        // 用户维度限流（1 秒窗口，自动过期）
         String userLimitKey = RedisKeyConstant.RATE_LIMIT_KEY + "seckill:" + userId;
-        boolean userAllowed = redissonStockManager.getStock(userLimitKey) < 1;
-        
-        if (!userAllowed) {
+        long userCount = redissonStockManager.getStock(userLimitKey);
+        if (userCount >= SystemConstant.RATE_LIMIT_PER_SECOND) {
             log.warn("用户限流：userId={}", userId);
             throw new BusinessException(ErrorCode.REQUEST_TOO_FREQUENT);
         }
-        // 使用原子操作递增
-        redissonStockManager.rollbackStock(userLimitKey, 1);
+        long newVal = redissonStockManager.incrementAndGet(userLimitKey);
+        if (newVal == 1) {
+            // 首次设置，添加 1 秒过期
+            redissonStockManager.expireKey(userLimitKey, 1, TimeUnit.SECONDS);
+        }
 
-        // 秒杀活动维度限流
+        // 秒杀活动维度限流（1 秒窗口，自动过期）
         String seckillLimitKey = RedisKeyConstant.SECKILL_RATE_LIMIT_KEY + seckillId;
         long currentCount = redissonStockManager.getStock(seckillLimitKey);
         if (currentCount >= SystemConstant.SECKILL_RATE_LIMIT_PER_SECOND) {
             log.warn("秒杀活动限流：seckillId={}", seckillId);
             throw new BusinessException(ErrorCode.RATE_LIMIT_EXCEEDED);
         }
-        redissonStockManager.rollbackStock(seckillLimitKey, 1);
+        long newVal2 = redissonStockManager.incrementAndGet(seckillLimitKey);
+        if (newVal2 == 1) {
+            redissonStockManager.expireKey(seckillLimitKey, 1, TimeUnit.SECONDS);
+        }
     }
 
     /**
      * 检查用户秒杀限制（每人限购 1 件）
+     * 使用 setIfAbsent 保证原子性，避免 TOCTOU 竞态
      */
     private void checkUserSeckillLimit(Long userId, Long seckillId) {
-        // 检查 Redis 中的锁定记录
         String lockKey = RedisKeyConstant.SECKILL_STOCK_LOCK_KEY + seckillId + ":" + userId;
-        Boolean exists = redisTemplate.hasKey(lockKey);
-        if (Boolean.TRUE.equals(exists)) {
-            log.info("用户已参与过该秒杀：userId={}, seckillId={}", userId, seckillId);
-            throw new BusinessException(ErrorCode.SECKILL_LIMIT_EXCEEDED);
-        }
-
-        // 标记用户已参与
-        redisTemplate.opsForValue().set(
+        Boolean success = redisTemplate.opsForValue().setIfAbsent(
             lockKey,
             "1",
             SystemConstant.STOCK_LOCK_EXPIRE_MINUTES,
             TimeUnit.MINUTES
         );
+        if (!Boolean.TRUE.equals(success)) {
+            log.info("用户已参与过该秒杀：userId={}, seckillId={}", userId, seckillId);
+            throw new BusinessException(ErrorCode.SECKILL_LIMIT_EXCEEDED);
+        }
     }
 
     /**

@@ -5,6 +5,8 @@ import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * Redisson 库存扣减工具类
  * 
@@ -96,5 +98,28 @@ public class RedissonStockManager {
     public void deleteStock(String stockKey) {
         RAtomicLong atomicLong = redissonClient.getAtomicLong(stockKey);
         atomicLong.delete();
+    }
+
+    /**
+     * 原子递增
+     *
+     * @param key Redis key
+     * @return 递增后的值
+     */
+    public long incrementAndGet(String key) {
+        RAtomicLong atomicLong = redissonClient.getAtomicLong(key);
+        return atomicLong.incrementAndGet();
+    }
+
+    /**
+     * 设置 key 过期时间
+     *
+     * @param key Redis key
+     * @param timeout 过期时长
+     * @param unit 时间单位
+     */
+    public void expireKey(String key, long timeout, TimeUnit unit) {
+        RAtomicLong atomicLong = redissonClient.getAtomicLong(key);
+        atomicLong.expire(timeout, unit);
     }
 }

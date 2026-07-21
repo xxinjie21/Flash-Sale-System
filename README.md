@@ -4,13 +4,15 @@
 
 ![JDK](https://img.shields.io/badge/JDK-1.8-blue.svg?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-2.7.15-brightgreen.svg?style=flat-square)
+![MyBatis-Plus](https://img.shields.io/badge/MyBatis--Plus-3.5.3.1-orange.svg?style=flat-square)
 ![Redis](https://img.shields.io/badge/Redis-6.2-red.svg?style=flat-square)
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.9-green.svg?style=flat-square)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-blue.svg?style=flat-square)
+![Redisson](https://img.shields.io/badge/Redisson-3.21.3-critical.svg?style=flat-square)
 
-**基于 SpringBoot + Redis + RabbitMQ 的高并发商品秒杀后端系统**
+**基于 Spring Boot + Redis + RabbitMQ + Redisson 的高并发商品秒杀后端系统**
 
-[核心特性](#-核心特性) • [技术栈](#-技术栈) • [快速开始](#-快速开始) • [项目结构](#-项目结构) • [面试考点](#-面试考点)
+[核心特性](#-核心特性) • [技术栈](#-技术栈) • [快速开始](#-快速开始) • [API 接口](#-api-接口) • [项目结构](#-项目结构) • [面试考点](#-面试考点)
 
 </div>
 
@@ -25,52 +27,50 @@
 **高并发场景下的库存准确性和系统稳定性。**
 
 - Redis 原子扣库存 + RabbitMQ 异步下单
-- 分布式锁防重复抢购
-- 延迟队列处理超时订单
-- 支持单机 5000+ TPS，P99 响应 < 500ms
+- Redisson 分布式锁防重复抢购
+- 死信队列 TTL 实现 30 分钟超时订单自动取消
+- 雪花算法生成全局唯一 ID
 
 ---
 
 ## 核心特性
 
-### 1. 高并发架构设计
+### 1. 高并发秒杀流程
 
 ```
-用户请求 → 限流拦截器 → Redis 分布式锁 → Redis 原子扣库存 → MQ 异步下单 → 数据库
+请求 → 限流拦截器(Redisson 原子计数器) → 登录拦截器(Token 校验)
+     → 分布式锁(用户+活动粒度) → Redis CAS 原子扣库存
+     → MQ 异步创建订单 → 死信队列延迟 30 分钟超时检测
 ```
 
-- 支持单机 **5000+** 并发请求
-- P99 接口响应 **< 500ms**
-- 库存 **零超卖**
-- 系统可用性 **99.9%**
+- 秒杀活动维度 + 用户维度双重限流（1000 QPS / 100 QPS）
+- Redisson `setIfAbsent` 保证每人限购 1 件
+- CAS 重试循环保证库存扣减原子性
+- MQ 手动 ACK + 重试 3 次，失败回滚 Redis 库存
 
-### 2. 多级缓存策略
+### 2. 死信队列超时处理
 
 ```
-浏览器缓存 → Redis 缓存 → 数据库
+订单消息 → TTL 队列(30分钟) → DLX 死信队列 → 消费者取消订单 + 回滚库存
 ```
 
-- 商品信息缓存（10 分钟）
-- 秒杀库存预热（启动时加载）
-- 用户 Token 缓存（2 小时）
+- RabbitMQ 原生 TTL + 死信交换机实现延迟队列
+- 无需额外定时任务扫描
+- 自动取消未支付订单 + 回滚 Redis/DB 库存
 
-### 3. 分布式锁保障
+### 3. 多级缓存策略
 
-- Redisson 分布式锁防止重复抢购
-- WatchDog 机制自动续期
-- 可重入锁支持
+| 缓存 | Key 模式 | TTL | 说明 |
+|------|---------|-----|------|
+| 商品详情 | `flash_sale:product:{id}` | 10 分钟 | JSON 缓存 |
+| 秒杀商品 | `flash_sale:seckill:product:{id}` | 5 分钟 | JSON 缓存 |
+| 用户 Token | `flash_sale:user:token:{token}` | 2 小时 | 滑动窗口续期 |
+| 用户信息 | `flash_sale:user:info:{id}` | 30 分钟 | JSON 缓存 |
 
-### 4. 消息队列削峰
+### 4. 启动预热
 
-- RabbitMQ 异步下单
-- 削峰填谷保护数据库
-- 死信队列处理超时订单
-
-### 5. 超时订单处理
-
-- 延迟队列实现 30 分钟超时检测
-- 自动取消订单 + 回滚库存
-- 保证数据一致性
+- `DataWarmUpRunner`（CommandLineRunner）启动时从 DB 加载库存到 Redis
+- `flash_sale:seckill:stock:{seckillId}` 原子计数器
 
 ---
 
@@ -84,15 +84,10 @@
 | Redis | 6.2 | 缓存、分布式锁、原子计数器 |
 | RabbitMQ | 3.9 | 消息队列、死信队列 |
 | MySQL | 8.0 | 关系型数据库 |
-| Redisson | 3.21.3 | 分布式锁、原子操作 |
+| Redisson | 3.21.3 | 分布式锁、CAS 原子操作 |
+| FastJSON2 | 2.0.32 | JSON 序列化 |
+| Guava | 32.1.3-jre | 工具类 |
 | Lombok | 1.18.30 | 简化代码 |
-
-### 核心依赖
-
-- **Redisson**：分布式锁 + CAS 乐观锁保证库存扣减原子性
-- **RabbitMQ**：削峰填谷 + 死信队列延迟处理
-- **Lombok**：简化实体类代码
-- **Spring Boot Starter Web**：RESTful API 框架
 
 ---
 
@@ -140,7 +135,6 @@ spring:
   redis:
     host: localhost
     port: 6379
-    password: 你的 Redis 密码（如果有）
   rabbitmq:
     host: localhost
     port: 5672
@@ -156,15 +150,11 @@ mvn clean spring-boot:run
 
 ### 6. 验证启动
 
-查看日志，出现以下信息表示启动成功：
-
 ```
 ========================================
 应用启动完成，开始初始化数据...
 预热秒杀商品库存：seckillId=1, stock=10
-预热秒杀商品库存：seckillId=2, stock=5
 共预热 2 个秒杀商品
-数据初始化完成
 ========================================
 高并发秒杀系统已就绪！
 API 地址：http://localhost:8080
@@ -173,34 +163,124 @@ API 地址：http://localhost:8080
 
 ---
 
-## 功能详解
+## 数据库设计
 
-### 用户接口
+### 表结构（4 张表）
 
-| 接口 | 方法 | URL | 说明 |
-|------|------|-----|------|
-| 用户注册 | POST | `/user/register` | 注册新用户 |
-| 用户登录 | POST | `/user/login` | 登录获取 Token |
-| 用户登出 | POST | `/user/logout` | 登出系统 |
-| 获取用户信息 | GET | `/user/info` | 获取当前用户信息 |
+#### user 用户表
 
-### 商品接口
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | PK，雪花算法 |
+| `username` | VARCHAR(50) | 唯一索引 |
+| `password` | VARCHAR(100) | BCrypt 加密 |
+| `email` | VARCHAR(100) | |
+| `phone` | VARCHAR(20) | 唯一索引 |
+| `status` | TINYINT | 0=禁用 1=正常 |
+| `create_time` | DATETIME | 索引 |
 
-| 接口 | 方法 | URL | 说明 |
-|------|------|-----|------|
-| 商品详情 | GET | `/product/detail/{id}` | 获取商品详细信息 |
-| 商品列表 | GET | `/product/list` | 获取商品分页列表 |
-| 秒杀商品列表 | GET | `/product/seckill/list` | 获取秒杀商品列表 |
-| 执行秒杀 | POST | `/product/seckill/execute` | 参与秒杀活动 |
+#### product 商品表
 
-### 订单接口
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | PK |
+| `name` | VARCHAR(200) | 商品名称 |
+| `original_price` | DECIMAL(10,2) | 原价 |
+| `current_price` | DECIMAL(10,2) | 现价 |
+| `stock` | INT | 库存 |
+| `category_id` | BIGINT | 分类索引 |
+| `status` | TINYINT | 0=下架 1=上架 |
 
-| 接口 | 方法 | URL | 说明 |
-|------|------|-----|------|
-| 订单详情 | GET | `/order/detail/{id}` | 获取订单详情 |
-| 订单列表 | GET | `/order/list` | 获取用户订单列表 |
-| 取消订单 | POST | `/order/cancel/{id}` | 取消未支付订单 |
-| 支付订单 | POST | `/order/pay/{id}` | 模拟支付订单 |
+#### seckill_product 秒杀商品表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | PK |
+| `product_id` | BIGINT | 唯一索引 |
+| `seckill_price` | DECIMAL(10,2) | 秒杀价 |
+| `seckill_stock` | INT | 秒杀库存 |
+| `seckill_start_time` | DATETIME | 复合索引 |
+| `seckill_end_time` | DATETIME | 复合索引 |
+| `status` | TINYINT | 0=未开始 1=进行中 2=已结束 |
+
+#### order 订单表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | PK |
+| `order_no` | VARCHAR(64) | 唯一索引，格式 yyyyMMdd+8位序列 |
+| `user_id` | BIGINT | 索引 |
+| `product_id` | BIGINT | 索引 |
+| `seckill_id` | BIGINT | 索引 |
+| `quantity` | INT | 数量 |
+| `total_amount` | DECIMAL(10,2) | 总金额 |
+| `order_status` | TINYINT | 0=待支付 1=已支付 2=已取消 3=已完成 |
+
+---
+
+## API 接口
+
+### 用户接口（4 个）
+
+| 方法 | URL | 权限 | 说明 |
+|------|-----|------|------|
+| POST | `/user/register` | 公开 | 注册新用户 |
+| POST | `/user/login` | 公开 | 登录获取 Token |
+| POST | `/user/logout` | 需登录 | 登出系统 |
+| GET | `/user/info` | 需登录 | 获取当前用户信息 |
+
+### 商品接口（5 个）
+
+| 方法 | URL | 权限 | 说明 |
+|------|-----|------|------|
+| GET | `/product/detail/{productId}` | 公开 | 获取商品详情（Redis 缓存 10min） |
+| GET | `/product/list` | 公开 | 分页查询商品列表 |
+| GET | `/product/seckill/list` | 公开 | 秒杀商品列表 |
+| GET | `/product/seckill/detail/{seckillId}` | 公开 | 秒杀商品详情（Redis 缓存 5min） |
+| POST | `/product/seckill/execute` | 需登录 | **执行秒杀**（核心接口） |
+
+### 订单接口（5 个）
+
+| 方法 | URL | 权限 | 说明 |
+|------|-----|------|------|
+| GET | `/order/detail/{orderId}` | 需登录 | 订单详情 |
+| GET | `/order/detail/no/{orderNo}` | 需登录 | 按订单号查询 |
+| GET | `/order/list` | 需登录 | 用户订单分页列表 |
+| POST | `/order/cancel/{orderId}` | 需登录 | 取消订单 |
+| POST | `/order/pay/{orderId}` | 需登录 | 支付订单 |
+
+---
+
+## Redis Key 设计
+
+| Key | 类型 | TTL | 说明 |
+|-----|------|-----|------|
+| `flash_sale:seckill:stock:{seckillId}` | String | 无 | 秒杀库存原子计数器 |
+| `flash_sale:seckill:lock:{seckillId}:{userId}` | String | 5min | 防重复库存锁定 |
+| `flash_sale:lock:seckill:{seckillId}` | Redisson Lock | - | 秒杀活动级分布式锁 |
+| `flash_sale:lock:order:{userId}:{seckillId}` | Redisson Lock | 30s | 用户订单去重锁 |
+| `flash_sale:ratelimit:{api}:{userId}` | String | 1s | 用户级限流 |
+| `flash_sale:ratelimit:seckill:{seckillId}` | String | 1s | 活动级限流 |
+| `flash_sale:order:timeout:{orderId}` | String | 30min | 订单超时检测 |
+| `flash_sale:product:{productId}` | String | 10min | 商品详情缓存 |
+| `flash_sale:seckill:product:{seckillId}` | String | 5min | 秒杀商品缓存 |
+| `flash_sale:user:token:{token}` | String | 2h | 用户登录 Token |
+| `flash_sale:user:info:{userId}` | String | 30min | 用户信息缓存 |
+
+---
+
+## MQ 队列设计
+
+| 交换机 | 队列 | Routing Key | 说明 |
+|--------|------|-------------|------|
+| `flash_sale.order.exchange` | `flash_sale.order.queue` | `order.create` | 普通订单创建 |
+| `flash_sale.seckill.order.exchange` | `flash_sale.seckill.order.queue` | `seckill.order.create` | 秒杀订单创建 |
+| `flash_sale.order.ttl.exchange` | `flash_sale.order.ttl.queue` | `order.ttl` | TTL 30min → 死信 |
+| `flash_sale.order.dlx.exchange` | `flash_sale.order.dlx.queue` | `order.dead` | 超时订单取消 |
+
+- 消息格式：Jackson JSON
+- 消费模式：手动 ACK，prefetch=1
+- 重试上限：3 次，失败进入死信队列
 
 ---
 
@@ -208,30 +288,46 @@ API 地址：http://localhost:8080
 
 ```
 High-Concurrency-Flash-Sale-System/
-├── src/
-│   └── main/
-│       ├── java/com/flashsale/
-│       │   ├── FlashSaleApplication.java    # 启动类
-│       │   ├── controller/                   # 控制层
-│       │   ├── service/                      # 服务层
-│       │   ├── mapper/                       # 数据访问层
-│       │   ├── entity/                       # 实体类
-│       │   ├── config/                       # 配置类
-│       │   ├── interceptor/                  # 拦截器
-│       │   ├── util/                         # 工具类
-│       │   ├── constant/                     # 常量类
-│       │   ├── exception/                    # 异常处理
-│       │   ├── mq/                           # MQ 处理
-│       │   └── runner/                       # 启动预热
-│       └── resources/
-│           ├── application.yml               # 配置文件
-│           ├── application-dev.yml           # 开发环境配置
-│           └── db/
-│               ├── schema.sql                # 建表脚本
-│               └── test_data.sql             # 测试数据
-├── pom.xml                                   # Maven 配置
-├── README.md                                 # 项目说明
-└── API_DOC.md                                # 接口文档
+├── src/main/java/com/flashsale/
+│   ├── FlashSaleApplication.java        # 启动类(@EnableAsync, @EnableScheduling)
+│   ├── config/
+│   │   ├── MybatisPlusConfig.java       # 分页拦截器
+│   │   ├── RabbitMQConfig.java          # 交换机/队列/绑定
+│   │   ├── RedisConfig.java             # RedisTemplate + @EnableCaching
+│   │   ├── RedissonConfig.java          # RedissonClient 单机模式
+│   │   ├── TransactionConfig.java       # @EnableTransactionManagement
+│   │   └── WebMvcConfig.java            # 拦截器注册 + CORS
+│   ├── constant/
+│   │   ├── MQConstant.java              # MQ 交换机/队列名称
+│   │   ├── RedisKeyConstant.java        # 14 种 Redis Key 模式
+│   │   └── SystemConstant.java          # 状态码、限流阈值、超时时间
+│   ├── controller/                       # 3 个 Controller，14 个接口
+│   ├── entity/dto/                      # 4 实体 + 3 DTO
+│   ├── exception/
+│   │   ├── ErrorCode.java               # 28 个错误码（5 大类）
+│   │   └── GlobalExceptionHandler.java  # 全局异常处理
+│   ├── interceptor/
+│   │   ├── LoginInterceptor.java        # Token 校验 + 滑动窗口续期
+│   │   └── RateLimitInterceptor.java    # Redisson 原子计数器限流
+│   ├── mapper/                           # 4 个 Mapper
+│   ├── mq/
+│   │   ├── OrderMessageConsumer.java    # 3 个 @RabbitListener + 手动 ACK
+│   │   └── OrderMessageProducer.java    # 3 个发送方法
+│   ├── runner/
+│   │   └── DataWarmUpRunner.java        # 启动预热库存到 Redis
+│   ├── service/impl/                    # 4 个 Service + 实现
+│   └── util/
+│       ├── IdGenerator.java             # 雪花算法 ID 生成
+│       ├── RedisLockUtil.java           # Redisson 分布式锁封装
+│       ├── RedissonRateLimiter.java     # 原子计数器限流器
+│       ├── RedissonStockManager.java    # CAS 原子库存管理
+│       └── Result.java                  # 统一响应封装
+├── src/main/resources/
+│   ├── application.yml / application-dev.yml / application-prod.yml
+│   └── db/  schema.sql + test_data.sql
+├── API_DOC.md                            # 完整接口文档（827行）
+├── DEPLOY.md                             # 部署指南（373行）
+└── PROJECT_HIGHLIGHTS.md                 # 面试亮点文档（447行）
 ```
 
 ---
@@ -240,12 +336,14 @@ High-Concurrency-Flash-Sale-System/
 
 | 特点 | 说明 |
 |------|------|
-| **Redis 预扣库存** | 秒杀开始前将库存预热到 Redis，秒杀时直接从 Redis 扣减 |
-| **原子操作** | Redisson CAS 乐观锁保证库存扣减原子性 |
-| **分布式锁** | Redisson 可重入锁 + WatchDog 自动续期 |
-| **消息队列** | RabbitMQ 削峰填谷 + 死信队列延迟处理 |
-| **超时订单** | 延迟队列实现 30 分钟超时检测，自动取消 + 回滚库存 |
-| **限流防刷** | Redisson 原子计数器实现令牌桶限流算法 |
+| **Redis CAS 原子扣库存** | `RedissonStockManager` CAS 重试循环，零超卖 |
+| **双重限流** | 活动级（1000 QPS）+ 用户级（100 QPS），1秒自动过期 |
+| **分布式锁** | 用户+活动粒度，3s 等待 / 10s 租约，防重复抢购 |
+| **死信队列延迟** | TTL 30min → DLX 自动取消超时订单 + 回滚库存 |
+| **雪花算法** | 全局唯一 ID，订单号格式 yyyyMMdd + 8 位序列号 |
+| **滑动窗口续期** | Token 每次访问自动续期 2 小时 |
+| **手动 ACK** | MQ 消费手动确认，失败重试 3 次后进死信 |
+| **28 个错误码** | 5 大分类（通用/用户/商品/订单/秒杀），业务异常规范化 |
 
 ---
 
@@ -256,51 +354,37 @@ High-Concurrency-Flash-Sale-System/
 **Q1: 如何保证库存不超卖？**
 
 **参考答案**：
-> 1. **Redis 预扣库存**：秒杀开始前将库存预热到 Redis，秒杀时直接从 Redis 扣减
-> 2. **原子操作**：使用 Redisson 的 CAS 乐观锁保证扣减操作的原子性
-> 3. **分布式锁**：使用 Redisson 分布式锁防止用户重复下单
-> 4. **数据库乐观锁**：更新库存时增加库存数量条件，防止超卖
+> 1. **Redis 预扣库存**：启动时 `DataWarmUpRunner` 预热到 Redis
+> 2. **CAS 原子操作**：`RedissonStockManager.decreaseStock()` 乐观锁重试循环
+> 3. **分布式锁**：`RedisLockUtil.tryLock()` 用户+活动粒度防并发
+> 4. **DB 乐观锁**：`ProductMapper` UPDATE 带 stock 条件兜底
 
-**Q2: 为什么要用 Redis 扣库存？**
+**Q2: 为什么用 RabbitMQ 而不是直接写 DB？**
 
 **参考答案**：
-> 1. **性能高**：Redis 是内存操作，性能是数据库的 10 倍以上
-> 2. **支持高并发**：Redis 单线程模型，无锁竞争
-> 3. **原子性保证**：Redis 单命令天然原子性，配合 Redisson CAS 操作
-> 4. **减轻数据库压力**：将 90%+ 的库存查询拦截在 Redis 层
+> 1. **削峰填谷**：秒杀 QPS 远超 DB 承载，MQ 控制消费速率
+> 2. **异步解耦**：Redis 扣库存后立即返回，不阻塞用户
+> 3. **超时处理**：TTL + 死信队列原生实现延迟取消，无需扫描
 
 ### 2. 分布式锁相关
 
-**Q3: Redisson 分布式锁的原理？**
+**Q3: Redisson 分布式锁如何避免死锁？**
 
 **参考答案**：
-> 1. **数据结构**：Redis Hash 结构存储锁信息
-> 2. **可重入**：记录线程 ID 和重入次数
-> 3. **WatchDog**：后台线程自动续期，防止业务未执行完锁过期
-> 4. **释放锁**：校验线程 ID，删除锁
-
-**Q4: 如何避免死锁？**
-
-**参考答案**：
-> 1. **设置超时时间**：获取锁时设置超时时间
-> 2. **WatchDog 机制**：Redisson 自动续期
-> 3. **finally 释放锁**：在 finally 块中释放锁
+> 1. **租约时间**：获取锁时设置 10 秒 leaseTime
+> 2. **WatchDog**：后台线程自动续期（默认 30s）
+> 3. **tryLock 超时**：3 秒等待时间，超时放弃
+> 4. **finally 释放**：`RedisLockUtil.unlock()` 确保释放
 
 ### 3. 消息队列相关
 
-**Q5: 为什么要用 MQ？**
+**Q4: 订单超时如何实现？**
 
 **参考答案**：
-> 1. **削峰填谷**：控制消费速率，保护数据库
-> 2. **异步解耦**：主线程快速返回，不阻塞用户
-> 3. **延迟处理**：死信队列实现订单超时检测
-
-**Q6: 如何保证消息不丢失？**
-
-**参考答案**：
-> 1. **消息持久化**：队列和消息都持久化
-> 2. **手动 ACK**：消费者处理成功后手动确认
-> 3. **死信队列**：重试失败进入死信队列人工处理
+> 1. **TTL 队列**：消息设置 30 分钟 TTL
+> 2. **死信交换机**：TTL 到期自动路由到 DLX 队列
+> 3. **消费者处理**：`OrderMessageConsumer` 取消订单 + 回滚库存
+> 4. **无需定时任务**：纯 MQ 原生延迟，架构简洁
 
 ---
 
@@ -308,15 +392,15 @@ High-Concurrency-Flash-Sale-System/
 
 ### Q: 项目启动失败？
 
-检查 MySQL、Redis、RabbitMQ 是否启动，检查配置文件中的连接信息是否正确。
+检查 MySQL、Redis、RabbitMQ 是否启动，检查 `application-dev.yml` 配置。
 
 ### Q: 秒杀接口返回库存不足？
 
-检查数据库是否有秒杀商品数据，检查 Redis 是否预热成功。
+检查 `test_data.sql` 是否执行成功，检查 Redis 预热日志。
 
 ### Q: 订单超时未取消？
 
-检查 RabbitMQ 是否启动，检查死信队列配置是否正确。
+检查 RabbitMQ 是否启动，检查死信队列配置（TTL + DLX）。
 
 ---
 

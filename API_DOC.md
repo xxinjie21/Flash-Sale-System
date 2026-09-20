@@ -4,7 +4,7 @@
 
 **高并发商品秒杀系统 - RESTful API 接口文档**
 
-版本：v1.0 | 更新时间：2026-06-05
+版本：v1.1 | 更新时间：2026-09-20
 
 </div>
 
@@ -41,18 +41,67 @@
 
 ### 错误码说明
 
-| 错误码 | 说明 |
-|--------|------|
-| 200 | 成功 |
-| 400 | 参数错误 |
-| 401 | 未登录/Token 失效 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 500 | 系统错误 |
-| 1001 | 库存不足 |
-| 1002 | 秒杀已结束 |
-| 1003 | 重复下单 |
-| 1004 | 限流 |
+错误码定义以 `com.flashsale.exception.ErrorCode` 为准，四类业务码首位为业务类型：1xxx 通用 / 2xxx 用户 / 3xxx 商品 / 4xxx 订单 / 5xxx 秒杀。
+
+**通用（1xxx）**
+
+| 错误码 | 名称 | 说明 |
+|--------|------|------|
+| 200 | SUCCESS | 成功 |
+| 1001 | SYSTEM_ERROR | 系统繁忙，请稍后再试 |
+| 1002 | PARAM_ERROR | 参数错误 |
+| 1003 | DATA_NOT_FOUND | 数据不存在 |
+| 1004 | DATA_ALREADY_EXISTS | 数据已存在 |
+| 1005 | UNAUTHORIZED | 未授权，请先登录 |
+| 1006 | FORBIDDEN | 无权限访问 |
+| 1007 | RATE_LIMIT_EXCEEDED | 访问过于频繁，请稍后再试 |
+| 1008 | REQUEST_TOO_FREQUENT | 请求过于频繁 |
+
+**用户（2xxx）**
+
+| 错误码 | 名称 | 说明 |
+|--------|------|------|
+| 2001 | USER_NOT_FOUND | 用户不存在 |
+| 2002 | USER_PASSWORD_ERROR | 用户名或密码错误 |
+| 2003 | USER_DISABLED | 用户已被禁用 |
+| 2004 | USER_ALREADY_EXISTS | 用户已存在 |
+| 2005 | TOKEN_INVALID | Token 无效或已过期 |
+| 2006 | TOKEN_EXPIRED | Token 已过期 |
+
+**商品（3xxx）**
+
+| 错误码 | 名称 | 说明 |
+|--------|------|------|
+| 3001 | PRODUCT_NOT_FOUND | 商品不存在 |
+| 3002 | PRODUCT_OUT_OF_STOCK | 商品库存不足 |
+| 3003 | PRODUCT_STATUS_ERROR | 商品状态异常 |
+| 3004 | PRODUCT_NOT_ON_SALE | 商品未上架 |
+
+**订单（4xxx）**
+
+| 错误码 | 名称 | 说明 |
+|--------|------|------|
+| 4001 | ORDER_NOT_FOUND | 订单不存在 |
+| 4002 | ORDER_STATUS_ERROR | 订单状态异常 |
+| 4003 | ORDER_CREATE_FAILED | 订单创建失败 |
+| 4004 | ORDER_PAYMENT_FAILED | 订单支付失败 |
+| 4005 | ORDER_CANCELLED | 订单已取消 |
+| 4006 | ORDER_EXPIRED | 订单已超时 |
+| 4007 | ORDER_ALREADY_PAID | 订单已支付 |
+
+**秒杀（5xxx）**
+
+| 错误码 | 名称 | 说明 |
+|--------|------|------|
+| 5001 | SECKILL_NOT_FOUND | 秒杀活动不存在 |
+| 5002 | SECKILL_NOT_STARTED | 秒杀活动尚未开始 |
+| 5003 | SECKILL_ENDED | 秒杀活动已结束 |
+| 5004 | SECKILL_OUT_OF_STOCK | 秒杀商品已抢光 |
+| 5005 | SECKILL_LIMIT_EXCEEDED | 每人限购 1 件 |
+| 5006 | SECKILL_REPEAT | 您已参与过该秒杀活动 |
+| 5007 | SECKILL_LOCK_FAILED | 获取锁失败，请稍后重试 |
+| 5008 | SECKILL_STOCK_LOCK_FAILED | 库存锁定失败 |
+| 5009 | SECKILL_QUEUE_FULL | 排队人数过多，请稍后再试 |
 
 ---
 
@@ -676,17 +725,33 @@ POST /order/pay/1234567890
 
 ### 限流策略
 
-系统采用令牌桶限流算法，防止恶意刷单。
+系统采用 Redisson 原生 `RRateLimiter` 令牌桶算法，防止恶意刷单。
+取令牌与扣减在 Redis 端一次原子脚本内完成，不存在并发竞态；
+限流 key 设有兜底 TTL，不会因 key 残留导致该维度被永久限流。
 
 **限流维度**：
-1. **用户维度**：每个用户每秒最多 1 次请求
-2. **活动维度**：每个秒杀活动每秒最多 1000 次请求
+1. **用户维度**：每个用户每秒最多 100 次请求，超出返回 `1008`
+2. **活动维度**：每个秒杀活动每秒最多 1000 次请求，超出返回 `1007`
+
+阈值定义在 `com.flashsale.constant.SystemConstant` 的
+`RATE_LIMIT_PER_SECOND` 与 `SECKILL_RATE_LIMIT_PER_SECOND`。
 
 **限流响应**：
+
+用户维度超限：
 ```json
 {
-  "code": 1004,
-  "message": "请求过于频繁，请稍后再试",
+  "code": 1008,
+  "message": "请求过于频繁",
+  "data": null
+}
+```
+
+活动维度超限：
+```json
+{
+  "code": 1007,
+  "message": "访问过于频繁，请稍后再试",
   "data": null
 }
 ```
@@ -709,16 +774,22 @@ POST /order/pay/1234567890
 
 ---
 
-## 六、签名验证（可选）
+## 六、签名验证（规划中，当前版本未实现）
 
-### 签名算法
+> ⚠️ 本章描述的是**尚未实现**的规划能力。当前代码中没有任何签名校验逻辑，
+> 秒杀接口 `POST /product/seckill/execute` 不接收也不校验 `timestamp` / `sign` 字段。
+> 保留此处仅作为后续扩展方向的记录，请勿据此对接。
+
+防刷目前由限流（第四章）与「每人限购 1 件」两项机制承担。
+
+### 签名算法（规划）
 
 **签名生成**：
 ```java
 String sign = MD5(params + secretKey);
 ```
 
-**请求示例**：
+**请求示例（规划）**：
 ```json
 {
   "seckillId": 1,
@@ -809,19 +880,33 @@ curl "http://localhost:8080/order/list?pageNum=1&pageSize=10" \
 
 ### Q4: 限流太严格？
 
-**A**: 可在配置文件中调整限流参数：
-```yaml
-rate-limit:
-  per-second: 1  # 用户维度每秒请求数
-  seckill-per-second: 1000  # 活动维度每秒请求数
+**A**: 限流阈值目前**硬编码在常量类**中，不在配置文件里。需修改
+`com.flashsale.constant.SystemConstant`：
+
+```java
+/** 接口限流：每秒最大请求数（用户维度） */
+public static final Integer RATE_LIMIT_PER_SECOND = 100;
+
+/** 秒杀限流：每秒最大请求数（活动维度） */
+public static final Integer SECKILL_RATE_LIMIT_PER_SECOND = 1000;
 ```
+
+修改后重新编译发布即可。若需要按环境动态调整，可将其改为
+`@ConfigurationProperties` 绑定到 `application-{profile}.yml`。
+
+### Q5: 订单超时未取消，还伴随「库存被永久占用」？
+
+**A**: 排查两点：
+1. RabbitMQ 是否正常运行，死信队列（TTL + DLX）是否正确创建
+2. 秒杀订单是否成功投递了**延迟消息** —— 秒杀单与普通单都必须投递，
+   漏投会导致订单永远不进 TTL 队列，从而既不取消也不回滚库存
 
 ---
 
 <div align="center">
 
-**文档版本**: v1.0  
-**最后更新**: 2026-06-05  
+**文档版本**: v1.1  
+**最后更新**: 2026-09-20  
 **作者**: XXJ
 
 </div>

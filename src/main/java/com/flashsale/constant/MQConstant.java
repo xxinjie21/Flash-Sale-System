@@ -102,4 +102,23 @@ public class MQConstant {
      * 消息投递重试次数
      */
     public static final int MESSAGE_RETRY_COUNT = 3;
+
+    // ==================== 5. 消费失败死信队列配置 ====================
+
+    /**
+     * 订单消费失败死信交换机
+     * 用途：接收重试耗尽后仍然失败的订单消息，避免消息被静默丢弃
+     */
+    public static final String ORDER_FAIL_EXCHANGE = "flash_sale.order.fail.exchange";
+
+    /**
+     * 订单消费失败死信队列
+     * 用途：沉淀需要人工介入的失败订单消息
+     */
+    public static final String ORDER_FAIL_QUEUE = "flash_sale.order.fail.queue";
+
+    /**
+     * 订单消费失败 Routing Key
+     */
+    public static final String ORDER_FAIL_ROUTING_KEY = "order.fail";
 }

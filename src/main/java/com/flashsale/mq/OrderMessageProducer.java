@@ -57,6 +57,24 @@ public class OrderMessageProducer {
     }
 
     /**
+     * 重投订单消息（消费失败重试）
+     *
+     * 消费失败时由消费者调用：把携带了 retryCount 的消息重新投递到原队列，
+     * 然后 ACK 掉原消息。不能依赖 basicNack(requeue=true)，
+     * 那样失败消息会立刻重回队头形成热循环。
+     *
+     * @param message 订单消息（retryCount 已由调用方写入）
+     * @param isSeckill 是否秒杀订单
+     */
+    public void resendOrderMessage(Map<String, Object> message, boolean isSeckill) {
+        if (isSeckill) {
+            sendSeckillOrderMessage(message);
+        } else {
+            sendOrderMessage(message);
+        }
+    }
+
+    /**
      * 发送延迟订单消息（用于超时取消）
      * 
      * @param message 订单消息

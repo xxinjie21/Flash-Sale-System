@@ -97,6 +97,15 @@ public class RedisKeyConstant {
      */
     public static final String USER_ORDER_CACHE_KEY = PROJECT_PREFIX + "order:user:";
 
+    /**
+     * 失败订单消息 Key
+     * 格式：flash_sale:order:fail:message
+     * 用途：沉淀重试耗尽仍失败的订单消息，供人工排查补偿
+     * 数据类型：List
+     * 过期时间：7 天
+     */
+    public static final String ORDER_FAIL_MESSAGE_KEY = PROJECT_PREFIX + "order:fail:message";
+
     // ==================== 5. 商品缓存相关 Key ====================
 
     /**

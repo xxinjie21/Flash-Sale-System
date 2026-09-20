@@ -23,6 +23,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -222,6 +223,97 @@ public class OrderServiceImpl implements OrderService {
         rollbackStock(order);
 
         log.info("超时订单已取消，订单号：{}", orderNo);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void createOrderFromMessage(Map<String, Object> message, boolean isSeckill) {
+        Long userId = parseLong(message.get("userId"));
+        Long productId = parseLong(message.get("productId"));
+        Integer quantity = parseInt(message.get("quantity"));
+        String orderNo = parseString(message.get("orderNo"));
+        Long seckillId = message.get("seckillId") == null ? null : parseLong(message.get("seckillId"));
+
+        // 幂等：MQ 手动 ACK + 重投机制下同一条消息可能被消费多次，按订单号去重
+        LambdaQueryWrapper<Order> existsWrapper = new LambdaQueryWrapper<>();
+        existsWrapper.eq(Order::getOrderNo, orderNo);
+        if (orderMapper.selectCount(existsWrapper) > 0) {
+            log.info("订单已存在，跳过重复消费，订单号：{}", orderNo);
+            return;
+        }
+
+        // 查询商品
+        Product product = productMapper.selectById(productId);
+        if (product == null) {
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_FOUND);
+        }
+
+        // 计算订单金额
+        BigDecimal totalAmount;
+        if (isSeckill) {
+            // 秒杀订单使用秒杀价格
+            SeckillProduct seckillProduct = seckillProductMapper.selectById(seckillId);
+            if (seckillProduct == null) {
+                throw new BusinessException(ErrorCode.SECKILL_NOT_FOUND);
+            }
+            totalAmount = seckillProduct.getSeckillPrice()
+                .multiply(new BigDecimal(quantity));
+        } else {
+            // 普通订单使用现价
+            totalAmount = product.getCurrentPrice().multiply(new BigDecimal(quantity));
+        }
+
+        // 创建订单
+        Order order = new Order();
+        order.setOrderNo(orderNo);
+        order.setUserId(userId);
+        order.setProductId(productId);
+        order.setSeckillId(seckillId);
+        order.setQuantity(quantity);
+        order.setTotalAmount(totalAmount);
+        order.setOrderStatus(SystemConstant.ORDER_STATUS_PENDING);  // 待支付
+        order.setCreateTime(LocalDateTime.now());
+        order.setUpdateTime(LocalDateTime.now());
+
+        int rows = orderMapper.insert(order);
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.ORDER_CREATE_FAILED);
+        }
+
+        log.info("订单创建成功，订单号：{}", orderNo);
+    }
+
+    /**
+     * 解析消息中的 Long 字段
+     *
+     * MQ 反序列化后数字可能为 Integer / Long / String，统一按字符串转换，
+     * 避免直接强转导致 ClassCastException。
+     */
+    private Long parseLong(Object value) {
+        if (value == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR);
+        }
+        return Long.valueOf(value.toString());
+    }
+
+    /**
+     * 解析消息中的 Integer 字段
+     */
+    private Integer parseInt(Object value) {
+        if (value == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR);
+        }
+        return Integer.valueOf(value.toString());
+    }
+
+    /**
+     * 解析消息中的字符串字段
+     */
+    private String parseString(Object value) {
+        if (value == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR);
+        }
+        return value.toString();
     }
 
     /**

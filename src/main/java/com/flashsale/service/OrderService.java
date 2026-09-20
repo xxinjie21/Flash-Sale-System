@@ -5,6 +5,7 @@ import com.flashsale.entity.Order;
 import com.flashsale.entity.dto.OrderDTO;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 订单服务接口
@@ -73,4 +74,16 @@ public interface OrderService {
      * @param orderNo 订单号
      */
     void handleTimeoutOrder(String orderNo);
+
+    /**
+     * 根据 MQ 消息创建订单（供消费者调用）
+     *
+     * 必须放在 Service 层：消费者内部自调用会使 @Transactional 代理失效，
+     * 通过接口调用才能让事务真正生效。
+     * 方法内部按 orderNo 做幂等校验，重复投递不会重复建单。
+     *
+     * @param message 订单消息
+     * @param isSeckill 是否秒杀订单
+     */
+    void createOrderFromMessage(Map<String, Object> message, boolean isSeckill);
 }

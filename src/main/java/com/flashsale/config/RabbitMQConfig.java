@@ -92,10 +92,14 @@ public class RabbitMQConfig {
 
     /**
      * 普通订单队列
+     * 配置死信交换机：重试耗尽后 nack(requeue=false) 的消息进入失败队列，
+     * 避免被 RabbitMQ 直接丢弃。
      */
     @Bean
     public Queue orderQueue() {
-        return QueueBuilder.durable(MQConstant.ORDER_QUEUE).build();
+        return QueueBuilder.durable(MQConstant.ORDER_QUEUE)
+            .withArguments(buildFailDeadLetterArgs())
+            .build();
     }
 
     /**
@@ -119,10 +123,13 @@ public class RabbitMQConfig {
 
     /**
      * 秒杀订单队列
+     * 配置死信交换机：与普通订单队列一致，失败消息不丢失。
      */
     @Bean
     public Queue seckillOrderQueue() {
-        return QueueBuilder.durable(MQConstant.SECKILL_ORDER_QUEUE).build();
+        return QueueBuilder.durable(MQConstant.SECKILL_ORDER_QUEUE)
+            .withArguments(buildFailDeadLetterArgs())
+            .build();
     }
 
     /**
@@ -197,5 +204,46 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(orderDLXQueue)
             .to(orderDLXExchange)
             .with(MQConstant.ORDER_DLX_ROUTING_KEY);
+    }
+
+    // ==================== 消费失败死信队列配置 ====================
+
+    /**
+     * 订单消费失败死信交换机
+     */
+    @Bean
+    public DirectExchange orderFailExchange() {
+        return new DirectExchange(MQConstant.ORDER_FAIL_EXCHANGE, true, false);
+    }
+
+    /**
+     * 订单消费失败死信队列
+     */
+    @Bean
+    public Queue orderFailQueue() {
+        return QueueBuilder.durable(MQConstant.ORDER_FAIL_QUEUE).build();
+    }
+
+    /**
+     * 订单消费失败死信队列绑定
+     */
+    @Bean
+    public Binding orderFailBinding(Queue orderFailQueue, DirectExchange orderFailExchange) {
+        return BindingBuilder.bind(orderFailQueue)
+            .to(orderFailExchange)
+            .with(MQConstant.ORDER_FAIL_ROUTING_KEY);
+    }
+
+    /**
+     * 构建「消费失败」死信参数
+     *
+     * 业务队列统一挂载该参数，保证 basicNack(requeue=false) 的消息
+     * 会进入失败死信队列而不是被静默丢弃。
+     */
+    private Map<String, Object> buildFailDeadLetterArgs() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", MQConstant.ORDER_FAIL_EXCHANGE);
+        args.put("x-dead-letter-routing-key", MQConstant.ORDER_FAIL_ROUTING_KEY);
+        return args;
     }
 }

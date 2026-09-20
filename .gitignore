@@ -1,0 +1,27 @@
+# ===== 编译输出 =====
+target/
+*.class
+*.jar
+*.war
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== IDE =====
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地私有配置（不要提交真实密码） =====
+src/main/resources/application-local.yml
+src/main/resources/application-local.properties

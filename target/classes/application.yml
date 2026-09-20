@@ -1,7 +1,0 @@
-# 高并发秒杀系统主配置文件
-
-spring:
-  profiles:
-    active: dev  # 默认激活开发环境配置
-  application:
-    name: high-concurrency-flash-sale

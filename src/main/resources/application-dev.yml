@@ -29,7 +29,11 @@ spring:
   redis:
     host: localhost
     port: 6379
-    password:
+    # 密码从环境变量 REDIS_PASSWORD 读取，不写死在仓库中。
+    # 本地开发请先设置该环境变量（或在 IDE 运行配置中注入）：
+    #   REDIS_PASSWORD=<你的 Redis 密码>
+    # 未设置时该值为空，Spring Boot 会按「Redis 未开启认证」处理
+    password: ${REDIS_PASSWORD:}
     database: 0
     # 连接池配置
     lettuce:

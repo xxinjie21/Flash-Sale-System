@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![JDK](https://img.shields.io/badge/JDK-1.8-blue.svg?style=flat-square)
+![JDK](https://img.shields.io/badge/JDK-17-blue.svg?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-2.7.15-brightgreen.svg?style=flat-square)
 ![MyBatis-Plus](https://img.shields.io/badge/MyBatis--Plus-3.5.3.1-orange.svg?style=flat-square)
 ![Redis](https://img.shields.io/badge/Redis-6.2-red.svg?style=flat-square)
@@ -38,7 +38,7 @@
 ### 1. 高并发秒杀流程
 
 ```
-请求 → 限流拦截器(Redisson 原子计数器) → 登录拦截器(Token 校验)
+请求 → 限流拦截器(Redisson 令牌桶) → 登录拦截器(Token 校验)
      → 分布式锁(用户+活动粒度) → Redis CAS 原子扣库存
      → MQ 异步创建订单 → 死信队列延迟 30 分钟超时检测
 ```
@@ -46,7 +46,7 @@
 - 秒杀活动维度 + 用户维度双重限流（1000 QPS / 100 QPS）
 - Redisson `setIfAbsent` 保证每人限购 1 件
 - CAS 重试循环保证库存扣减原子性
-- MQ 手动 ACK + 重试 3 次，失败回滚 Redis 库存
+- MQ 手动 ACK；普通订单重投 3 次，失败进死信；秒杀订单失败立即回滚库存 + 释放限购标记后进死信
 
 ### 2. 死信队列超时处理
 
@@ -78,7 +78,7 @@
 
 | 技术 | 版本 | 说明 |
 |------|------|------|
-| JDK | 1.8 | Java 开发环境 |
+| JDK | 17 | Java 开发环境 |
 | Spring Boot | 2.7.15 | 快速开发框架 |
 | MyBatis-Plus | 3.5.3.1 | ORM 持久层框架 |
 | Redis | 6.2 | 缓存、分布式锁、原子计数器 |
@@ -96,7 +96,7 @@
 ### 1. 环境准备
 
 ```bash
-# JDK 1.8
+# JDK 17
 java -version
 
 # Maven 3.6+
@@ -259,13 +259,14 @@ API 地址：http://localhost:8080
 | `flash_sale:seckill:lock:{seckillId}:{userId}` | String | 5min | 防重复库存锁定 |
 | `flash_sale:lock:seckill:{seckillId}` | Redisson Lock | - | 秒杀活动级分布式锁 |
 | `flash_sale:lock:order:{userId}:{seckillId}` | Redisson Lock | 30s | 用户订单去重锁 |
-| `flash_sale:ratelimit:{api}:{userId}` | String | 1s | 用户级限流 |
-| `flash_sale:ratelimit:seckill:{seckillId}` | String | 1s | 活动级限流 |
+| `flash_sale:ratelimit:{api}:{userId}` | RRateLimiter | 2s | 用户级令牌桶限流 |
+| `flash_sale:ratelimit:seckill:{seckillId}` | RRateLimiter | 2s | 活动级令牌桶限流 |
 | `flash_sale:order:timeout:{orderId}` | String | 30min | 订单超时检测 |
 | `flash_sale:product:{productId}` | String | 10min | 商品详情缓存 |
 | `flash_sale:seckill:product:{seckillId}` | String | 5min | 秒杀商品缓存 |
 | `flash_sale:user:token:{token}` | String | 2h | 用户登录 Token |
 | `flash_sale:user:info:{userId}` | String | 30min | 用户信息缓存 |
+| `flash_sale:order:fail:message` | List | 7d | 失败订单消息沉淀，供人工排查补偿 |
 
 ---
 
@@ -277,10 +278,13 @@ API 地址：http://localhost:8080
 | `flash_sale.seckill.order.exchange` | `flash_sale.seckill.order.queue` | `seckill.order.create` | 秒杀订单创建 |
 | `flash_sale.order.ttl.exchange` | `flash_sale.order.ttl.queue` | `order.ttl` | TTL 30min → 死信 |
 | `flash_sale.order.dlx.exchange` | `flash_sale.order.dlx.queue` | `order.dead` | 超时订单取消 |
+| `flash_sale.order.fail.exchange` | `flash_sale.order.fail.queue` | `order.fail` | 重试耗尽 / 秒杀失败消息沉淀 |
 
 - 消息格式：Jackson JSON
 - 消费模式：手动 ACK，prefetch=1
-- 重试上限：3 次，失败进入死信队列
+- 普通订单：失败后携带 `retryCount` 重新投递，重投 3 次仍失败则 nack 进失败队列（队列已配置 `x-dead-letter-exchange`，不会静默丢消息）
+- 秒杀订单：失败即回滚 Redis 库存并释放用户限购标记，随后进失败队列（不再重试，避免"库存已退还却仍建单"的超卖）
+- 幂等：消费端按 `order_no` 去重，重复投递不会重复建单
 
 ---
 
@@ -308,7 +312,7 @@ High-Concurrency-Flash-Sale-System/
 │   │   └── GlobalExceptionHandler.java  # 全局异常处理
 │   ├── interceptor/
 │   │   ├── LoginInterceptor.java        # Token 校验 + 滑动窗口续期
-│   │   └── RateLimitInterceptor.java    # Redisson 原子计数器限流
+│   │   └── RateLimitInterceptor.java    # Redisson 令牌桶限流
 │   ├── mapper/                           # 4 个 Mapper
 │   ├── mq/
 │   │   ├── OrderMessageConsumer.java    # 3 个 @RabbitListener + 手动 ACK
@@ -319,7 +323,7 @@ High-Concurrency-Flash-Sale-System/
 │   └── util/
 │       ├── IdGenerator.java             # 雪花算法 ID 生成
 │       ├── RedisLockUtil.java           # Redisson 分布式锁封装
-│       ├── RedissonRateLimiter.java     # 原子计数器限流器
+│       ├── RedissonRateLimiter.java     # RRateLimiter 令牌桶限流器
 │       ├── RedissonStockManager.java    # CAS 原子库存管理
 │       └── Result.java                  # 统一响应封装
 ├── src/main/resources/
@@ -336,13 +340,14 @@ High-Concurrency-Flash-Sale-System/
 
 | 特点 | 说明 |
 |------|------|
-| **Redis CAS 原子扣库存** | `RedissonStockManager` CAS 重试循环，零超卖 |
-| **双重限流** | 活动级（1000 QPS）+ 用户级（100 QPS），1秒自动过期 |
+| **Redis CAS 原子扣库存** | `RedissonStockManager` CAS 重试循环，零超卖；库存 key 缺失时明确报错而非伪装成售罄 |
+| **双重限流** | 活动级（1000 QPS）+ 用户级（100 QPS），Redisson 原生 `RRateLimiter` 令牌桶，取令牌与扣减在 Redis 端原子完成 |
 | **分布式锁** | 用户+活动粒度，3s 等待 / 10s 租约，防重复抢购 |
-| **死信队列延迟** | TTL 30min → DLX 自动取消超时订单 + 回滚库存 |
+| **死信队列延迟** | TTL 30min → DLX 自动取消超时订单 + 回滚库存，秒杀单与普通单均投递延迟消息 |
+| **失败补偿** | 秒杀流程任一步失败都会回滚已扣库存并释放限购标记，不会出现"没抢到却被锁" |
 | **雪花算法** | 全局唯一 ID，订单号格式 yyyyMMdd + 8 位序列号 |
 | **滑动窗口续期** | Token 每次访问自动续期 2 小时 |
-| **手动 ACK** | MQ 消费手动确认，失败重试 3 次后进死信 |
+| **手动 ACK + 幂等** | 消费手动确认，按订单号去重；普通订单重投 3 次，耗尽后进失败死信队列 |
 | **28 个错误码** | 5 大分类（通用/用户/商品/订单/秒杀），业务异常规范化 |
 
 ---

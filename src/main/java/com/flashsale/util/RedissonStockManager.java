@@ -5,8 +5,6 @@ import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.TimeUnit;
-
 /**
  * Redisson 库存扣减工具类
  * 
@@ -35,15 +33,16 @@ public class RedissonStockManager {
      */
     public int decreaseStock(String stockKey, int quantity) {
         RAtomicLong atomicLong = redissonClient.getAtomicLong(stockKey);
-        
-        // 检查库存是否存在
-        long currentStock = atomicLong.get();
-        if (currentStock < 0) {
-            // Key 不存在
+
+        // 检查库存 key 是否存在
+        // 注意：不能用 get() < 0 判断，RAtomicLong 对不存在的 key 返回 0，
+        // 会把「库存未预热」静默当成「库存为 0 已售罄」，从而掩盖故障。
+        if (!atomicLong.isExists()) {
             return -1;
         }
-        
+
         // CAS 乐观锁扣减库存
+        long currentStock = atomicLong.get();
         while (currentStock >= quantity) {
             // 尝试原子扣减
             if (atomicLong.compareAndSet(currentStock, currentStock - quantity)) {
@@ -98,28 +97,5 @@ public class RedissonStockManager {
     public void deleteStock(String stockKey) {
         RAtomicLong atomicLong = redissonClient.getAtomicLong(stockKey);
         atomicLong.delete();
-    }
-
-    /**
-     * 原子递增
-     *
-     * @param key Redis key
-     * @return 递增后的值
-     */
-    public long incrementAndGet(String key) {
-        RAtomicLong atomicLong = redissonClient.getAtomicLong(key);
-        return atomicLong.incrementAndGet();
-    }
-
-    /**
-     * 设置 key 过期时间
-     *
-     * @param key Redis key
-     * @param timeout 过期时长
-     * @param unit 时间单位
-     */
-    public void expireKey(String key, long timeout, TimeUnit unit) {
-        RAtomicLong atomicLong = redissonClient.getAtomicLong(key);
-        atomicLong.expire(timeout, unit);
     }
 }

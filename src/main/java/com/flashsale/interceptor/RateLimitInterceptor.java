@@ -15,11 +15,11 @@ import javax.servlet.http.HttpServletResponse;
 /**
  * 限流拦截器
  * 
- * 基于 Redisson 原子计数器实现限流算法
+ * 基于 Redisson 原生 RRateLimiter 实现令牌桶限流
  * 
  * 面试考点：
  * 1. 限流算法：令牌桶、漏桶、计数器、滑动窗口
- * 2. 为什么用 Redisson？原子操作保证线程安全，无需 Lua 脚本
+ * 2. 为什么用 Redisson？取令牌与扣减在 Redis 端原子完成，天然无竞态
  * 3. 限流维度：用户维度、IP 维度、接口维度
  * 
  * @author XXJ
@@ -44,11 +44,11 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         String uri = request.getRequestURI();
         String limitKey = RedisKeyConstant.RATE_LIMIT_KEY + uri + ":" + userId;
 
-        // 使用 Redisson 原子计数器限流
+        // 使用 Redisson 原生令牌桶限流
         boolean allowed = redissonRateLimiter.tryAcquire(
             limitKey,
             SystemConstant.RATE_LIMIT_PER_SECOND,  // 每秒最大请求数
-            1  // 1 秒过期
+            1  // 1 秒窗口
         );
 
         // 判断是否超过限制

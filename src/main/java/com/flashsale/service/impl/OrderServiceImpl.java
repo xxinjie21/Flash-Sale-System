@@ -258,6 +258,16 @@ public class OrderServiceImpl implements OrderService {
             }
             totalAmount = seckillProduct.getSeckillPrice()
                 .multiply(new BigDecimal(quantity));
+
+            // 同步扣减数据库侧库存（乐观锁：seckill_stock >= quantity）
+            // 必要性：应用启动时 warmUpSeckillStock 是用这份库存预热 Redis 的，
+            // 若这里不扣，重启后已售出的库存会被重置回初始值，导致超卖。
+            int stockRows = seckillProductMapper.decreaseStock(seckillId, quantity);
+            if (stockRows == 0) {
+                log.error("数据库秒杀库存不足，Redis 与 DB 可能不一致：seckillId={}, quantity={}",
+                    seckillId, quantity);
+                throw new BusinessException(ErrorCode.SECKILL_OUT_OF_STOCK);
+            }
         } else {
             // 普通订单使用现价
             totalAmount = product.getCurrentPrice().multiply(new BigDecimal(quantity));
@@ -325,10 +335,11 @@ public class OrderServiceImpl implements OrderService {
         Long seckillId = order.getSeckillId();
 
         if (seckillId != null) {
-            // 秒杀订单：回滚 Redis 库存
+            // 秒杀订单：同时回滚 Redis 库存与数据库库存，保持两边一致
             String stockKey = RedisKeyConstant.SECKILL_STOCK_KEY + seckillId;
             redisTemplate.opsForValue().increment(stockKey, quantity);
-            log.info("秒杀库存已回滚，秒杀 ID={}, 数量={}", seckillId, quantity);
+            seckillProductMapper.increaseStock(seckillId, quantity);
+            log.info("秒杀库存已回滚（Redis + DB），秒杀 ID={}, 数量={}", seckillId, quantity);
         } else {
             // 普通订单：回滚数据库库存
             productMapper.increaseStock(productId, quantity);

@@ -159,15 +159,28 @@ public class ProductServiceImpl implements ProductService {
 
         List<SeckillProduct> seckillProducts = seckillProductMapper.selectList(wrapper);
 
+        int warmed = 0;
+        int skipped = 0;
         for (SeckillProduct sp : seckillProducts) {
-            // 将库存预热到 Redis
             String stockKey = RedisKeyConstant.SECKILL_STOCK_KEY + sp.getId();
-            redisTemplate.opsForValue().set(stockKey, sp.getSeckillStock());
 
-            log.info("秒杀商品 ID={}, 库存={} 已预热到 Redis", sp.getId(), sp.getSeckillStock());
+            // 仅在 key 不存在时写入。
+            // Redis 中的库存是秒杀过程中实时扣减的，若每次启动都无条件覆盖，
+            // 重启就会把已售出的库存重置回数据库里的初始值，直接造成超卖。
+            // 需要强制以数据库为准刷新时，请先手动删除该 key。
+            Boolean created = redisTemplate.opsForValue()
+                .setIfAbsent(stockKey, sp.getSeckillStock());
+
+            if (Boolean.TRUE.equals(created)) {
+                warmed++;
+                log.info("秒杀商品 ID={}, 库存={} 已预热到 Redis", sp.getId(), sp.getSeckillStock());
+            } else {
+                skipped++;
+                log.info("秒杀商品 ID={} 的库存已存在于 Redis，跳过预热以保留实时库存", sp.getId());
+            }
         }
 
-        log.info("秒杀商品库存预热完成，共预热 {} 个商品", seckillProducts.size());
+        log.info("秒杀商品库存预热完成，新预热 {} 个，跳过 {} 个（Redis 中已存在）", warmed, skipped);
     }
 
     @Override

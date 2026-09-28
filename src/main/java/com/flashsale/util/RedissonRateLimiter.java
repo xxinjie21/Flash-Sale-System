@@ -7,8 +7,6 @@ import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-
 /**
  * Redisson 限流工具类
  *
@@ -22,8 +20,13 @@ import java.time.Duration;
  *    - 取令牌的判定与扣减在 Redis 端一次原子脚本内完成，天然无竞态
  * 2. trySetRate 只在限流器不存在时生效，因此可以安全地每次调用：
  *    既不会重置已消耗的令牌，又能保证限流器过期重建后速率参数依然正确
- * 3. TTL 兜底：限流 key 按「用户 / 活动」维度生成，数量随维度增长，
- *    用 expireIfNotSet 保证 key 最终被回收，避免 Redis 内存无限增长
+ * 3. ⚠️ 千万不要给 RRateLimiter 的 key 设置 TTL（包括 expireIfNotSet）：
+ *    RRateLimiter 的状态跨多个 key（主 Hash + {key}:value + {key}:permits），
+ *    只给主 Hash 加 TTL 会周期性地把它清掉，而 Lua 脚本随后会对 nil 做算术，
+ *    抛出 `attempt to perform arithmetic on a nil value` /
+ *    `RateLimiter is not initialized`，限流器直接失效并让请求 500。
+ *    在 2000 并发压测下这个问题会被放大到约 30% 请求失败。
+ *    代价是限流 key 不会自动回收，需要按维度数量评估内存，或另配清理任务。
  *
  * @author XXJ
  * @since 2026-06-05
@@ -47,10 +50,6 @@ public class RedissonRateLimiter {
 
         // 仅当限流器不存在时才会生效：重复调用不会重置已消耗的令牌
         rateLimiter.trySetRate(RateType.OVERALL, maxCount, expireSeconds, RateIntervalUnit.SECONDS);
-
-        // 兜底 TTL，避免限流 key 常驻内存。
-        // TTL 取窗口的 2 倍：窗口到期时桶本就已重新注满，不影响稳态速率
-        rateLimiter.expireIfNotSet(Duration.ofSeconds(expireSeconds * 2));
 
         // 非阻塞获取 1 个令牌
         return rateLimiter.tryAcquire();

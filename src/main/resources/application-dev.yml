@@ -44,11 +44,16 @@ spring:
         max-wait: 3000ms
 
   # RabbitMQ 配置
+  # 凭据从环境变量读取，便于本地 / 容器环境切换：
+  #   RABBITMQ_USER / RABBITMQ_PASSWORD
+  # 注意：RabbitMQ 的 guest 账号默认只能从 loopback 登录，
+  # 若 RabbitMQ 跑在 Docker 里（NAT 后来源不是 localhost），
+  # guest 会被拒绝（ACCESS_REFUSED），需另建用户或放开 loopback_users。
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
     virtual-host: /
     # 消息确认机制
     publisher-confirm-type: correlated
@@ -58,6 +63,14 @@ spring:
       simple:
         acknowledge-mode: manual
         prefetch: 1
+
+# 业务自定义配置
+flashsale:
+  ratelimit:
+    # 单个维度（已认证用户，或未认证时的客户端 IP）每秒最大请求数。
+    # 单机压测时所有请求来自同一 IP，会被这个阈值挡住，可通过
+    # X-Forwarded-For 模拟不同客户端，或临时调大该值。
+    per-second: 100
 
 # MyBatis-Plus 配置
 mybatis-plus:

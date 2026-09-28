@@ -3,7 +3,9 @@ package com.flashsale.config;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
@@ -69,12 +71,23 @@ public class RedisConfig {
             new Jackson2JsonRedisSerializer<>(Object.class);
         
         ObjectMapper mapper = new ObjectMapper();
+        // 注册 Java 8 时间模块：实体与 DTO 里大量使用 LocalDateTime
+        // （SeckillProduct.seckillStartTime、ProductDTO.seckillStartTime 等），
+        // 不注册会抛 SerializationException: Java 8 date/time type
+        // `java.time.LocalDateTime` not supported by default，导致缓存写入全部失败。
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
         mapper.activateDefaultTyping(
             BasicPolymorphicTypeValidator.builder()
                 .allowIfSubType("com.flashsale.")
                 .allowIfSubType("java.util.")
                 .allowIfSubType("java.lang.")
+                // 缓存对象里含价格（BigDecimal）与时间（java.time.*）字段，
+                // 不放行会在反序列化时抛：
+                // Could not resolve type id 'java.math.BigDecimal' ... denied resolution
+                .allowIfSubType("java.math.")
+                .allowIfSubType("java.time.")
                 .build(),
             ObjectMapper.DefaultTyping.NON_FINAL
         );

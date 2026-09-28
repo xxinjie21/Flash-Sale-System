@@ -45,10 +45,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(loginInterceptor)
             .addPathPatterns("/**")  // 拦截所有请求
             .excludePathPatterns(
-                "/user/login",      // 排除登录接口
-                "/user/register",   // 排除注册接口
-                "/product/list",    // 排除商品列表
-                "/product/detail"   // 排除商品详情
+                "/user/login",              // 排除登录接口
+                "/user/register",           // 排除注册接口
+                "/product/list",            // 排除商品列表
+                "/product/detail/**",       // 排除商品详情（注意必须是 /** 才会匹配 /detail/{id}）
+                "/product/seckill/list",    // 排除秒杀商品列表
+                "/product/seckill/detail/**" // 排除秒杀商品详情
             )
             .order(2);
     }

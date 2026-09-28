@@ -7,7 +7,9 @@ import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -48,7 +50,7 @@ public class OrderMessageConsumer {
      */
     @RabbitListener(queues = MQConstant.ORDER_QUEUE)
     public void consumeOrderMessage(Map<String, Object> message, Channel channel,
-                                    long deliveryTag) throws IOException {
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("收到普通订单消息：{}", message);
 
         try {
@@ -71,7 +73,7 @@ public class OrderMessageConsumer {
      */
     @RabbitListener(queues = MQConstant.SECKILL_ORDER_QUEUE)
     public void consumeSeckillOrderMessage(Map<String, Object> message, Channel channel,
-                                           long deliveryTag) throws IOException {
+                                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("收到秒杀订单消息：{}", message);
 
         try {
@@ -99,7 +101,7 @@ public class OrderMessageConsumer {
      */
     @RabbitListener(queues = MQConstant.ORDER_DLX_QUEUE)
     public void consumeTimeoutOrderMessage(Map<String, Object> message, Channel channel,
-                                           long deliveryTag) throws IOException {
+                                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("收到超时订单消息：{}", message);
 
         try {
@@ -128,7 +130,7 @@ public class OrderMessageConsumer {
      */
     @RabbitListener(queues = MQConstant.ORDER_FAIL_QUEUE)
     public void consumeFailOrderMessage(Map<String, Object> message, Channel channel,
-                                        long deliveryTag) throws IOException {
+                                        @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.error("订单消息处理失败，进入失败队列，需人工介入：{}", message);
         try {
             redisTemplate.opsForList().rightPush(RedisKeyConstant.ORDER_FAIL_MESSAGE_KEY, message);

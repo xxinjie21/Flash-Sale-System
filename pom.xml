@@ -71,9 +71,28 @@
         </dependency>
 
         <!-- Redisson 分布式锁 -->
+        <!--
+            注意：redisson-spring-boot-starter 会默认拉入 redisson-spring-data-30，
+            那是给 Spring Data Redis 3.x 用的适配层。本项目基于 Spring Boot 2.7
+            （Spring Data Redis 2.7），必须换成 redisson-spring-data-27，
+            否则运行期 RedissonConnection 初始化时会抛
+            NoClassDefFoundError: org.springframework.data.redis.connection.zset.Tuple
+        -->
         <dependency>
             <groupId>org.redisson</groupId>
             <artifactId>redisson-spring-boot-starter</artifactId>
+            <version>${redisson.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.redisson</groupId>
+                    <artifactId>redisson-spring-data-30</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-data-27</artifactId>
             <version>${redisson.version}</version>
         </dependency>
 

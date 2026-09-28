@@ -58,19 +58,43 @@
 - 无需额外定时任务扫描
 - 自动取消未支付订单 + 回滚 Redis/DB 库存
 
-### 3. 多级缓存策略
+### 3. 缓存策略
+
+统一使用 Redis 作为缓存层（手写 `RedisTemplate`，非注解式缓存）：
 
 | 缓存 | Key 模式 | TTL | 说明 |
 |------|---------|-----|------|
-| 商品详情 | `flash_sale:product:{id}` | 10 分钟 | JSON 缓存 |
-| 秒杀商品 | `flash_sale:seckill:product:{id}` | 5 分钟 | JSON 缓存 |
+| 商品详情 | `flash_sale:product:{id}` | 10 分钟 | JSON 缓存，回源后写回 |
+| 秒杀商品 | `flash_sale:seckill:product:{id}` | 5 分钟 | JSON 缓存，回源后写回 |
 | 用户 Token | `flash_sale:user:token:{token}` | 2 小时 | 滑动窗口续期 |
-| 用户信息 | `flash_sale:user:info:{id}` | 30 分钟 | JSON 缓存 |
+
+> 说明：本项目**没有**本地（JVM 内）缓存层，也没有使用 `@Cacheable`，
+> 所有缓存都是显式调用 RedisTemplate 完成的，刻意保持简单可控。
 
 ### 4. 启动预热
 
 - `DataWarmUpRunner`（CommandLineRunner）启动时从 DB 加载库存到 Redis
 - `flash_sale:seckill:stock:{seckillId}` 原子计数器
+
+---
+
+### 5. 性能实测
+
+压测脚本 [`loadtest/seckill-load-test.jmx`](loadtest/seckill-load-test.jmx)，
+完整报告 [`loadtest/README.md`](loadtest/README.md)。全部为 Apache JMeter 实测。
+
+| 指标 | 场景 A（2000 并发） | 场景 B（5000 并发） |
+|------|-------------------|-------------------|
+| 总请求数 | 10,000 | 10,000 |
+| 吞吐 | 1002 TPS | 1079 TPS |
+| 平均延迟 | 552 ms | 2009 ms |
+| P99 | 1347 ms | 2723 ms |
+| 客户端失败 | 0.86% | 0.00% |
+| **成交订单** | **58** | **58** |
+
+**10000 次并发请求抢 58 件库存，两组梯度都恰好成交 58 单**，Redis 与 MySQL
+库存同时归零。并发从 2000 提到 5000 吞吐只涨 7.7%，说明单机容量已在
+1000~1100 TPS 附近饱和。
 
 ---
 
@@ -255,18 +279,17 @@ API 地址：http://localhost:8080
 
 | Key | 类型 | TTL | 说明 |
 |-----|------|-----|------|
-| `flash_sale:seckill:stock:{seckillId}` | String | 无 | 秒杀库存原子计数器 |
-| `flash_sale:seckill:lock:{seckillId}:{userId}` | String | 5min | 防重复库存锁定 |
-| `flash_sale:lock:seckill:{seckillId}` | Redisson Lock | - | 秒杀活动级分布式锁 |
-| `flash_sale:lock:order:{userId}:{seckillId}` | Redisson Lock | 30s | 用户订单去重锁 |
-| `flash_sale:ratelimit:{api}:{userId}` | RRateLimiter | 2s | 用户级令牌桶限流 |
+| `flash_sale:seckill:stock:{seckillId}` | String | 无 | 秒杀实时剩余库存（唯一权威来源） |
+| `flash_sale:seckill:lock:{seckillId}:{userId}` | String | 5min | 每人限购 1 件的占位标记，流程失败时释放 |
+| `flash_sale:lock:order:{userId}:{seckillId}` | Redisson Lock | 10s | 用户+活动粒度的订单去重锁 |
+| `flash_sale:ratelimit:seckill:user:{userId}` | RRateLimiter | 2s | 用户级令牌桶限流 |
 | `flash_sale:ratelimit:seckill:{seckillId}` | RRateLimiter | 2s | 活动级令牌桶限流 |
-| `flash_sale:order:timeout:{orderId}` | String | 30min | 订单超时检测 |
 | `flash_sale:product:{productId}` | String | 10min | 商品详情缓存 |
 | `flash_sale:seckill:product:{seckillId}` | String | 5min | 秒杀商品缓存 |
 | `flash_sale:user:token:{token}` | String | 2h | 用户登录 Token |
-| `flash_sale:user:info:{userId}` | String | 30min | 用户信息缓存 |
 | `flash_sale:order:fail:message` | List | 7d | 失败订单消息沉淀，供人工排查补偿 |
+
+> 以上为 `RedisKeyConstant` 中实际被引用的全部 key，文档与代码保持一致。
 
 ---
 
@@ -329,7 +352,10 @@ High-Concurrency-Flash-Sale-System/
 ├── src/main/resources/
 │   ├── application.yml / application-dev.yml / application-prod.yml
 │   └── db/  schema.sql + test_data.sql
-├── API_DOC.md                            # 完整接口文档（827行）
+├── loadtest/                             # JMeter 压测脚本与实测报告
+│   ├── seckill-load-test.jmx
+│   └── README.md
+├── API_DOC.md                            # 完整接口文档
 ├── DEPLOY.md                             # 部署指南（373行）
 └── PROJECT_HIGHLIGHTS.md                 # 面试亮点文档（447行）
 ```

@@ -206,7 +206,9 @@ public class SeckillServiceImpl implements SeckillService {
      */
     private void rateLimit(Long seckillId, Long userId) {
         // 用户维度限流（1 秒窗口）
-        String userLimitKey = RedisKeyConstant.RATE_LIMIT_KEY + "seckill:" + userId;
+        // 注意 key 里带 "user" 段：活动维度用的是 ratelimit:seckill:{seckillId}，
+        // 若两者前缀相同，userId 与 seckillId 数值撞号时会共用同一个令牌桶
+        String userLimitKey = RedisKeyConstant.RATE_LIMIT_KEY + "seckill:user:" + userId;
         if (!redissonRateLimiter.tryAcquire(
                 userLimitKey, SystemConstant.RATE_LIMIT_PER_SECOND, 1)) {
             log.warn("用户限流：userId={}", userId);

@@ -41,14 +41,6 @@ public class RedisKeyConstant {
     // ==================== 2. 分布式锁相关 Key ====================
 
     /**
-     * 秒杀分布式锁 Key
-     * 格式：flash_sale:lock:seckill:{seckillId}
-     * 用途：秒杀活动级别的分布式锁
-     * 数据类型：String (Redisson Lock)
-     */
-    public static final String SECKILL_LOCK_KEY = PROJECT_PREFIX + "lock:seckill:";
-
-    /**
      * 订单防重锁 Key
      * 格式：flash_sale:lock:order:{userId}:{seckillId}
      * 用途：防止用户重复下单
@@ -78,24 +70,6 @@ public class RedisKeyConstant {
     public static final String SECKILL_RATE_LIMIT_KEY = PROJECT_PREFIX + "ratelimit:seckill:";
 
     // ==================== 4. 订单相关 Key ====================
-
-    /**
-     * 订单超时检测 Key
-     * 格式：flash_sale:order:timeout:{orderId}
-     * 用途：订单超时未支付检测 (配合延迟队列)
-     * 数据类型：String
-     * 过期时间：30 分钟
-     */
-    public static final String ORDER_TIMEOUT_KEY = PROJECT_PREFIX + "order:timeout:";
-
-    /**
-     * 用户订单缓存 Key
-     * 格式：flash_sale:order:user:{userId}
-     * 用途：缓存用户订单信息
-     * 数据类型：Hash
-     * 过期时间：1 小时
-     */
-    public static final String USER_ORDER_CACHE_KEY = PROJECT_PREFIX + "order:user:";
 
     /**
      * 失败订单消息 Key
@@ -136,21 +110,4 @@ public class RedisKeyConstant {
      * 过期时间：2 小时
      */
     public static final String USER_TOKEN_KEY = PROJECT_PREFIX + "user:token:";
-
-    /**
-     * 用户信息缓存 Key
-     * 格式：flash_sale:user:info:{userId}
-     * 用途：缓存用户基本信息
-     * 数据类型：String (JSON)
-     * 过期时间：30 分钟
-     */
-    public static final String USER_INFO_CACHE_KEY = PROJECT_PREFIX + "user:info:";
-
-    /**
-     * 接口令牌桶 Key（令牌桶限流）
-     * 格式：flash_sale:token:bucket:{api}
-     * 用途：令牌桶算法实现接口限流
-     * 数据类型：String (List)
-     */
-    public static final String TOKEN_BUCKET_KEY = PROJECT_PREFIX + "token:bucket:";
 }

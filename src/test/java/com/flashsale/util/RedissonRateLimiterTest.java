@@ -105,18 +105,22 @@ class RedissonRateLimiterTest {
     }
 
     @Test
-    @DisplayName("限流 key 会被设置 TTL，避免按维度增长的 key 常驻内存")
-    void tryAcquire_shouldSetTtlOnLimiterKey() {
-        String key = newKey("ttl");
-        long windowSeconds = 10;
+    @DisplayName("限流 key 不得被设置 TTL（回归：设 TTL 会让 Lua 脚本对 nil 做算术，限流器失效）")
+    void tryAcquire_mustNotSetTtlOnLimiterKey() throws InterruptedException {
+        String key = newKey("ttl-regression");
 
-        rateLimiter.tryAcquire(key, 100, windowSeconds);
+        // 跨多个窗口反复调用。若给限流 key 设了 TTL，Redisson 会在 key 过期后
+        // 抛出 RedisException: attempt to perform arithmetic on a nil value
+        for (int round = 0; round < 12; round++) {
+            for (int i = 0; i < 5; i++) {
+                rateLimiter.tryAcquire(key, 5, 1);
+            }
+            Thread.sleep(200);
+        }
 
-        long ttl = redissonClient.getRateLimiter(key).remainTimeToLive();
-        assertThat(ttl)
-            .as("TTL 应已设置（窗口的 2 倍，单位毫秒）")
-            .isGreaterThan(0L)
-            .isLessThanOrEqualTo(windowSeconds * 2 * 1000 + 1000);
+        assertThat(redissonClient.getRateLimiter(key).remainTimeToLive())
+            .as("RRateLimiter 的状态跨多个 key，设 TTL 会把状态清掉导致限流器崩溃")
+            .isEqualTo(-1L);
 
         redissonClient.getKeys().delete(key);
     }

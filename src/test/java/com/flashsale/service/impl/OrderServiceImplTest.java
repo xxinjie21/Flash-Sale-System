@@ -11,6 +11,7 @@ import com.flashsale.mapper.ProductMapper;
 import com.flashsale.mapper.SeckillProductMapper;
 import com.flashsale.mq.OrderMessageProducer;
 import com.flashsale.util.IdGenerator;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -29,6 +31,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -64,6 +68,9 @@ class OrderServiceImplTest {
     private RedisTemplate<String, Object> redisTemplate;
 
     @Mock
+    private ValueOperations<String, Object> valueOperations;
+
+    @Mock
     private OrderMessageProducer messageProducer;
 
     @Mock
@@ -71,6 +78,11 @@ class OrderServiceImplTest {
 
     @InjectMocks
     private OrderServiceImpl orderService;
+
+    @BeforeEach
+    void setUp() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+    }
 
     private Map<String, Object> message(Long seckillId, Integer quantity) {
         Map<String, Object> message = new HashMap<>();
@@ -135,11 +147,12 @@ class OrderServiceImplTest {
     }
 
     @Test
-    @DisplayName("秒杀订单：金额按秒杀价计算，并带上秒杀 ID")
+    @DisplayName("秒杀订单：金额按秒杀价计算，并带上秒杀 ID，同时扣减数据库库存")
     void createOrderFromMessage_seckillOrder_shouldUseSeckillPrice() {
         when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
         when(productMapper.selectById(PRODUCT_ID)).thenReturn(product("99.00"));
         when(seckillProductMapper.selectById(SECKILL_ID)).thenReturn(seckillProduct("9.90"));
+        when(seckillProductMapper.decreaseStock(SECKILL_ID, 2)).thenReturn(1);
         when(orderMapper.insert(any(Order.class))).thenReturn(1);
 
         orderService.createOrderFromMessage(message(SECKILL_ID, 2), true);
@@ -152,6 +165,45 @@ class OrderServiceImplTest {
         assertThat(saved.getTotalAmount())
             .as("秒杀单必须用秒杀价 9.90，而不是现价 99.00")
             .isEqualByComparingTo("19.80");
+
+        // 数据库库存必须同步扣减，否则应用重启时预热会把已售库存重置回初始值
+        verify(seckillProductMapper).decreaseStock(SECKILL_ID, 2);
+    }
+
+    @Test
+    @DisplayName("数据库库存不足（乐观锁影响 0 行）：抛「已抢光」，不建单")
+    void createOrderFromMessage_dbStockInsufficient_shouldThrow() {
+        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+        when(productMapper.selectById(PRODUCT_ID)).thenReturn(product("99.00"));
+        when(seckillProductMapper.selectById(SECKILL_ID)).thenReturn(seckillProduct("9.90"));
+        when(seckillProductMapper.decreaseStock(SECKILL_ID, 1)).thenReturn(0);
+
+        Throwable thrown = catchThrowable(
+            () -> orderService.createOrderFromMessage(message(SECKILL_ID, 1), true));
+
+        assertThat(thrown).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) thrown).getCode())
+            .isEqualTo(ErrorCode.SECKILL_OUT_OF_STOCK.getCode());
+        verify(orderMapper, never()).insert(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("取消秒杀订单：Redis 与数据库库存都要加回")
+    void cancelSeckillOrder_shouldRollbackBothRedisAndDbStock() {
+        Order existing = new Order();
+        existing.setId(1L);
+        existing.setUserId(USER_ID);
+        existing.setProductId(PRODUCT_ID);
+        existing.setSeckillId(SECKILL_ID);
+        existing.setQuantity(2);
+        existing.setOrderStatus(0);
+        when(orderMapper.selectById(1L)).thenReturn(existing);
+        when(orderMapper.updateById(any(Order.class))).thenReturn(1);
+
+        orderService.cancelOrder(1L, USER_ID);
+
+        verify(valueOperations).increment(anyString(), eq(2L));
+        verify(seckillProductMapper).increaseStock(SECKILL_ID, 2);
     }
 
     @Test
